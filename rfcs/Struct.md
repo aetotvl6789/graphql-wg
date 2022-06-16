@@ -1,42 +1,66 @@
-**THIS IS A WORK IN PROGRESS. DON'T READ IT YET, IT'S UNDER HEAVY FLUX!**
-
-# Struct type
+# `struct` and `structUnion` types
 
 GraphQL currently has two types that are suitable for both input and output:
 scalar and enum. These are both "leaf" types that _generally_ possess no
 structure. This proposal is to add another type that's available on both input
 and output, and yet is a composite type - one that has structure.
 
-## What would it look like
+Before we think about _why_ we'd do this, lets take a look at the solution to
+give some shared terminology.
+
+## What would it look like?
 
 There are two types that are close to solving this problem already:
 
-- Input objects are already a structured input that handle many of these
-  concerns, but they're only valid on input
+- Input objects are already a structured input that handle many of our concerns,
+  but they're only valid on input
 - Scalars are already available on both input and output, and users can define
   their own
 
 Originally, like with
 [@oneOf](https://github.com/graphql/graphql-spec/pull/825), I considered this
 proposal as a modification of one of these types. However, it feels like it
-makes sense to introduce a new type that combines the advantages of these two
-types: `struct`. Additionally, to enable complex polymorphism, we introduce the
+makes sense to introduce a new type, `struct`, that combines the advantages of
+these two types. Additionally, to enable complex polymorphism, we introduce the
 `structUnion` type.
+
+**NOTE**: this syntax, these keywords, etc are not set in stone. Discussion is
+very welcome!
 
 ### `struct`
 
-A struct is composed of fields, each field has a type, and the type of a struct
-field can be a struct, structUnion, scalar, enum, or a wrapping type over any of
-these.
+A `struct` is composed of fields, each field has a type, and the type of a
+`struct` field can be a `struct`, `structUnion`, scalar, enum, or a wrapping
+type over any of these.
 
-Importantly, when querying a struct you can never reach an object type, union or
-interface from within a struct - the entire struct acts as a leaf.
+Importantly, when querying a `struct` you can never reach an object type, union
+or interface from within a `struct` - the entire `struct` acts as a leaf.
 
-Similarly, for input, a struct may never contain an input object.
+Similarly, for input, a `struct` may never contain an input object.
+
+Like for input objects, a `struct` may not contain an unbreakable cycle.
+
+```graphql
+struct Biography {
+  title: String!
+  socials: BiographySocials
+  paragraphs: [Paragraph!]!
+}
+```
 
 ### `structUnion`
 
-A `structUnion` is composed only of `struct`s
+A `structUnion` is an abstract type representing that the value may be one of
+many possible `struct`s.
+
+```graphql
+structUnion Paragraph =
+  | TextParagraph
+  | PullquoteParagraph
+  | BlockquoteParagraph
+  | TweetParagraph
+  | GalleryParagraph
+```
 
 ### Example schema
 
@@ -45,13 +69,13 @@ together paragraphs of different types. You could imagine that these paragraphs
 were managed by an editor such as ProseMirror.
 
 ```graphql
-struct UserBiography {
+struct Biography {
   title: String!
-  socials: UserBiographySocials
+  socials: BiographySocials
   paragraphs: [Paragraph!]!
 }
 
-struct UserBiographySocials {
+struct BiographySocials {
   github: String
   twitter: String
   linkedIn: String
@@ -92,7 +116,7 @@ struct Image {
 type User {
   id: ID!
   username: String!
-  bio: UserBiography!
+  bio: Biography!
 }
 
 type Query {
@@ -100,32 +124,32 @@ type Query {
 }
 
 type Mutation {
-  setUserBio(userId: ID!, bio: UserBiography!): User
+  setUserBio(userId: ID!, bio: Biography!): User
 }
 ```
 
 ### Pure structured data
 
 Structs are seen as raw data, the same on input as on output, and thus their
-fields do not have resolvers, do not accept arguments, and most likely will not
-support directives (at least not to start with...). They're just pure structured
-data.
+fields do not have resolvers, and do not accept arguments. They're just pure
+structured data.
 
 ### Selection sets
 
 Controversially, structs could be the first type in GraphQL that can be both a
 leaf _and_ a non-leaf type - i.e. a selection set over them is optional. If you
 do not provide a selection set then the entire object is returned. If you do
-provide a selection set then only those fields will be selected and returned.
+provide a selection set then those fields will be selected and returned.
 
 Struct selection sets are similar to, but not the same as, regular selection
 sets. In particular:
 
 - struct fields are not `FIELD`s, i.e. they cannot have `FIELD` directives
-  attached
-- aliases are not allowed
+  attached (suggest we call them `STRUCT_FIELD`)
+- aliases are not allowed, otherwise the simple field merging (see below) cannot
+  work
 
-Fragments are supported on structs.
+Both inline and named fragments are supported on `struct`s and `structUnion`s.
 
 Field merging is very straightforward; for the example schema above, the
 following query:
@@ -168,17 +192,29 @@ And similarly, the following:
 ```graphql
 {
   user(id: "1") {
-    bio {
-      title
-    }
-    bio {
-      socials {
-        twitter
-      }
-    }
-    # Select the entire field
-    bio
+    ...A
+    ...B
+    ...C
   }
+}
+
+fragment A on User {
+  bio {
+    title
+  }
+}
+
+fragment B on User {
+  bio {
+    socials {
+      twitter
+    }
+  }
+}
+
+fragment C on User {
+  # Select the entire field
+  bio
 }
 ```
 
@@ -192,36 +228,37 @@ would be equivalent to:
 }
 ```
 
-(Note that because we're selecting the entire `bio` field, all possible
-selection sets are satisfied.)
+(Note that because we're selecting the entire `bio` field in `C`, all possible
+subselections are satisfied.)
 
 ### `__typename`
 
-`__typename` is available to query on all structs. This ensures that clients
-that automatically and silently add `__typename` to every selection set will not
-break.
+`__typename` is available to query on all `struct`s (and thus on
+`structUnion`s). This ensures that clients that automatically and silently add
+`__typename` to every selection set will not break, and is also useful for
+resolving the type of a `structUnion`.
 
 On input of a `struct`, `__typename` is optional but recommended.
 
 On input of a `structUnion`, `__typename` is required to determine the type of
 the `struct` supplied.
 
-If we were to make `__typename` required on all struct inputs then changing an
+If we were to make `__typename` required on all `struct` inputs then changing an
 input type from `struct` to `structUnion` would be non-breaking; this is a nice
 advantage, but is currently outweighed by the desire to make input pleasant for
 users.
 
-## Why
+## Motivation
 
-Why:
+Motivation breaks into the following categories:
 
-- composite in/out
-- polymorphic input
-- polymorphic input/output equivalence
-- wildcard
-- atomic pure data (no resolvers)
+- providing a composite type that can be used for both input and output
+- providing a composite type that's capable of polymorphism on input
+- providing a type that treats a composite type as an atom (effectively allowing
+  "wildcard" selection)
+- providing a polymorphic type that's symmetric across input and output
 
-## Why introduce a structured input/output equivalent type?
+### Why introduce a structured input/output equivalent type?
 
 There has long been a desire in the community for allowing custom scalars to
 have a defined structure and yet still be treated as "atomic" (i.e. pull down
@@ -259,7 +296,7 @@ However, if we constraint the problem space down to that of pure structured data
 (treating it like an atom - like a `scalar` is currently) then many of these
 concerns lessen.
 
-## Should structs replace input objects?
+## Should `struct` replace input objects?
 
 Maybe... They do seem to solve many of the same problems. However one major
 difference is intent; because `struct` is intended to be used for input/output
@@ -267,3 +304,8 @@ it's intended that you pull it down, modify it as need be, and then send it back
 again. As such, adding a non-nullable field to a struct used in this way may not
 be a breaking change - existing clients should automatically receive the
 additional fields, and send them back unmodified.
+
+The semantics of `struct` and input objects are very similar, so it could be
+that we repurpose input objects for struct usage; this will need further
+thought, discussion and investigation. Not least because the term `input` would
+make it confusing ;)
