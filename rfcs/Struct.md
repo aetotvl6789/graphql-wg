@@ -5,8 +5,8 @@ scalar and enum. These are both "leaf" types that _generally_ possess no
 structure. This proposal is to add another type that's available on both input
 and output, and yet is a composite type - one that has structure.
 
-Before we think about _why_ we'd do this, lets take a look at the solution to
-give some shared terminology.
+Before we think about _why_ we'd do this, lets take a look at the proposed
+solution to give some shared terminology.
 
 ## What would it look like?
 
@@ -31,14 +31,15 @@ very welcome!
 
 A `struct` is composed of fields, each field has a type, and the type of a
 `struct` field can be a `struct`, `structUnion`, scalar, enum, or a wrapping
-type over any of these.
+type over any of these. (i.e. it is only composed of types that are valid in
+both input and output.)
 
 Importantly, when querying a `struct` you can never reach an object type, union
 or interface from within a `struct` - the entire `struct` acts as a leaf.
 
 Similarly, for input, a `struct` may never contain an input object.
 
-Like for input objects, a `struct` may not contain an unbreakable cycle.
+Similar to input objects, a `struct` may not contain an unbreakable cycle.
 
 ```graphql
 struct Biography {
@@ -61,6 +62,10 @@ structUnion Paragraph =
   | TweetParagraph
   | GalleryParagraph
 ```
+
+Champion's note: I'm very open to dropping `structUnion` and using a oneOf
+approach instead, or adding a oneOf approach in addition. I've gone with
+`structUnion` for now for greater similarity with the existing GraphQL types.
 
 ### Example schema
 
@@ -146,8 +151,8 @@ sets. In particular:
 
 - struct fields are not `FIELD`s, i.e. they cannot have `FIELD` directives
   attached (suggest we call them `STRUCT_FIELD`)
-- aliases are not allowed, otherwise the simple field merging (see below) cannot
-  work
+- aliases are not allowed, otherwise the simple field merging (see below) does
+  not work
 
 Both inline and named fragments are supported on `struct`s and `structUnion`s.
 
@@ -243,41 +248,66 @@ On input of a `struct`, `__typename` is optional but recommended.
 On input of a `structUnion`, `__typename` is required to determine the type of
 the `struct` supplied.
 
-If we were to make `__typename` required on all `struct` inputs then changing an
-input type from `struct` to `structUnion` would be non-breaking; this is a nice
-advantage, but is currently outweighed by the desire to make input pleasant for
-users.
+Champion's note: if we were to make `__typename` required on all `struct` inputs
+then changing an input type from `struct` to `structUnion` would be
+non-breaking; this is a nice advantage, but is currently outweighed by the
+desire to make input pleasant for users.
 
 ## Motivation
 
 Motivation breaks into the following categories:
 
-- providing a composite type that can be used for both input and output
 - providing a composite type that's capable of polymorphism on input
-- providing a type that treats a composite type as an atom (effectively allowing
-  "wildcard" selection)
+  - https://github.com/graphql/graphql-wg/blob/main/rfcs/InputUnion.md
 - providing a polymorphic type that's symmetric across input and output
+  - https://github.com/graphql/graphql-wg/blob/main/rfcs/InputUnion.md#-b-input-polymorphism-matches-output-polymorphism
+- providing an output type that's capable of non-infinite recursion
+  - https://github.com/graphql/graphql-spec/issues/237
+  - https://github.com/graphql/graphql-spec/issues/929
+  - Introspection:
+    https://github.com/graphql/graphql-js/blob/cfbc023296a1a596429a6312abede040c9353644/src/utilities/getIntrospectionQuery.ts#L131-L162
+  - I've felt this need myself with "table of contents" and similar use cases
+- providing a composite type that can be used for both input and output
+  - See Benjie's schema metadata proposal ;)
+  - Reporting filters where you may want to feed them into a GraphQL query, but
+    also to save/load them for next time
+- providing an "atomic" (scalar) type that has structure
+  - https://www.npmjs.com/package/graphql-type-json
+  - https://github.com/graphql/graphql-spec/issues/688
+- providing a type that allows "wildcard" selection
+  - https://github.com/graphql/graphql-spec/issues/127
+  - https://github.com/graphql/graphql-spec/issues/147
+  - https://github.com/graphql/graphql-spec/issues/942
+- providing a better `defaultValue` in introspection
+  - having to parse a string is not ideal; since `struct` is so similar to input
+    objects and supports all the other input types we could use it for
+    `defaultValue` (via a new field, of course). This may be an argument in
+    favour of repurposing the `input` type as `struct` directly...
 
-### Why introduce a structured input/output equivalent type?
+### "Atom" with structure
 
 There has long been a desire in the community for allowing custom scalars to
 have a defined structure and yet still be treated as "atomic" (i.e. pull down
 the entire object, not just a selection). In some schemas this has been solved
-by using a `JSON` scalar that represents the composite type as a JSON encoded
-string, or even the JSON object directly; but such scalars do not define
+by using a custom `JSON` scalar that represents the composite type as a JSON
+encoded string, or even the JSON object directly; but such scalars do not define
 structure explicitly.
 
-One example of where this is useful is with traditional RESTful APIs which use
-the `PUT` (rather than `PATCH`) mechanic - i.e. they replace the entire object
-rather than "patching" it. To allow us to do this in a future compatible way
-(allowing for the object to gain more properties over time) we must be careful
-not to accidentally drop properties that we do not understand, so we should pull
-down the entire object, modify the parts that we want to (leaving parts we don't
-understand alone) and then send the entire (modified) object back to the server.
+### PUT vs PATCH
 
-Another example is the
-[huge thread on adding support for wildcards](https://github.com/graphql/graphql-spec/issues/942).
-In general GraphQL, wildcards have a lot of questions:
+Another example of where this is useful is with traditional RESTful APIs which
+use the `PUT` (rather than `PATCH`) mechanic - i.e. they replace the entire
+object rather than "patching" it. To allow us to do this in a future compatible
+way (allowing for the object to gain more properties over time) we must be
+careful not to accidentally drop properties that we do not understand, so we
+should pull down the entire object, modify the parts that we want to (leaving
+parts we don't understand alone) and then send the entire (modified) object back
+to the server.
+
+### Wildcards
+
+Another example is the many threads requesting support for wildcards. In general
+GraphQL, wildcards have a lot of questions:
 
 - Which fields do we select?
 - What do we do for fields with arguments?
