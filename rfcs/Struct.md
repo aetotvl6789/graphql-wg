@@ -304,7 +304,7 @@ should pull down the entire object, modify the parts that we want to (leaving
 parts we don't understand alone) and then send the entire (modified) object back
 to the server.
 
-### Wildcards
+### Wildcards
 
 Another example is the many threads requesting support for wildcards. In general
 GraphQL, wildcards have a lot of questions:
